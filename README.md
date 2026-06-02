@@ -2,7 +2,7 @@
 
 <img src="assets/bernini-icon.png" width="560" alt="Bernini"/>
 
-#### Latent Semantic Planning for Video Diffusion
+<h4 align="center">Latent Semantic Planning for Video Diffusion</h4>
 
 **Chenchen Liu<sup>\*</sup>, Junyi Chen<sup>\*</sup>, Lei Li<sup>\*</sup>, Lu Chi<sup>\*,§</sup>, Mingzhen Sun<sup>\*</sup>, Zhuoying Li<sup>\*</sup>, Yi Fu, Ruoyu Guo, Yiheng Wu, Ge Bai, Zehuan Yuan<sup>✉</sup>**
 
@@ -79,14 +79,41 @@ Optional extras:
 
 ### Weights
 
-Bernini-R uses two sets of weights:
+Bernini-R provides two ways to obtain the renderer weights. The **diffusers
+format is recommended** — it is a self-contained diffusers-format directory whose
+`transformer` / `transformer_2` already hold the Bernini-R weights, so you point
+`--config` at it and the weights load directly, with **no** `--high_noise_ckpt` /
+`--low_noise_ckpt` needed.
+
+#### Option A — diffusers format (recommended)
+
+A single ready-to-use diffusers-format model from
+[`ByteDance/Bernini-R-Diffusers`](https://huggingface.co/ByteDance/Bernini-R-Diffusers).
+It bundles the Wan2.2 base components (VAE, UMT5 text encoder, tokenizer) together
+with the Bernini-R transformer weights, so nothing else is downloaded at runtime.
+
+```bash
+pip install -U "huggingface_hub"
+hf download ByteDance/Bernini-R-Diffusers --local-dir Bernini-R-Diffusers
+```
+
+Then pass it via `--config` and omit the checkpoint flags, e.g.:
+
+```bash
+python infer_single_gpu.py --config Bernini-R-Diffusers \
+    --case assets/testcases/t2i/t2i.json --num_frames 1
+```
+
+#### Option B — separate checkpoints
+
+The original layout, where Bernini-R uses two sets of weights loaded separately:
 
 1. **Wan2.2 base** — [`Wan-AI/Wan2.2-T2V-A14B-Diffusers`](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) on Hugging Face. Supplies the
    VAE, UMT5 text encoder, tokenizer, and the transformer architecture/base weights.
    It is downloaded automatically on first run (configured by `wan22_base` in
    `configs/bernini_renderer_wan22/config.json`).
 2. **Bernini-R checkpoint** — the trained high-noise / low-noise transformer weights
-   (safetensors) from [Hugging Face](https://huggingface.co/ByteDance/Bernini), passed with
+   (safetensors) from [ByteDance/Bernini-R](https://huggingface.co/ByteDance/Bernini-R), passed with
    `--high_noise_ckpt` / `--low_noise_ckpt`. Both a local directory and a Hugging
    Face repo id are accepted.
 
@@ -95,7 +122,7 @@ Download models using huggingface-cli:
 ```bash
 pip install -U "huggingface_hub"
 hf download Wan-AI/Wan2.2-T2V-A14B-Diffusers --local-dir Wan2.2-T2V-A14B-Diffusers
-hf download ByteDance/Bernini --local-dir Bernini
+hf download ByteDance/Bernini-R --local-dir Bernini-R
 ```
 
 ## 🚀 Usage
@@ -108,7 +135,7 @@ keeps long prompts out of the command line. Each task has a directory under
 [`assets/testcases/`](assets/testcases/) for the format and the bundled
 `t2i` / `i2i` / `t2v` / `v2v` / `rv2v` /`r2v` examples.
 
-### Prompt enhancer (recommended)
+### Prompt enhancer (highly recommended)
 
 `--use_pe` enhances the prompt through an OpenAI-compatible endpoint and is
 recommended for best generation quality. The `openai` SDK is installed by

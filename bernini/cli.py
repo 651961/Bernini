@@ -43,7 +43,6 @@ def add_common_args(parser):
     g.add_argument("--config", default="configs/bernini_renderer_wan22", help="model config directory")
     g.add_argument("--high_noise_ckpt", default=None, help="high-noise checkpoint (dir or HF repo)")
     g.add_argument("--low_noise_ckpt", default=None, help="low-noise checkpoint (dir or HF repo)")
-    g.add_argument("--no_load_weights", action="store_true", help="skip loading the Bernini Renderer checkpoint")
     g.add_argument("--use_unipc", action=argparse.BooleanOptionalAction, default=True,
                    help="use the UniPC scheduler, required by the *_apg guidance modes "
                         "(default: on; pass --no-use_unipc to disable)")
@@ -99,14 +98,27 @@ def setup_logging():
 
 
 def build_pipeline(args, device) -> BerniniRendererPipeline:
-    if not args.no_load_weights and (args.high_noise_ckpt is None or args.low_noise_ckpt is None):
-        raise ValueError("--high_noise_ckpt and --low_noise_ckpt are required (or pass --no_load_weights)")
+    # When the checkpoints are not both given, the Bernini weights are expected
+    # to live directly in --config (a diffusers-format dir whose
+    # transformer/transformer_2 already hold the Bernini weights), so the
+    # separate checkpoint load is skipped.
+    if (args.high_noise_ckpt is None) != (args.low_noise_ckpt is None):
+        raise ValueError(
+            "--high_noise_ckpt and --low_noise_ckpt must be given together; "
+            "got only one of them"
+        )
+    load_ckpt_weights = args.high_noise_ckpt is not None and args.low_noise_ckpt is not None
+    if not load_ckpt_weights:
+        logging.getLogger("bernini.cli").info(
+            "no --high_noise_ckpt/--low_noise_ckpt given; loading Bernini weights directly "
+            "from the diffusers-format dir '%s' (transformer/transformer_2)", args.config
+        )
     return BerniniRendererPipeline.from_pretrained(
         args.config,
         high_noise_ckpt=args.high_noise_ckpt,
         low_noise_ckpt=args.low_noise_ckpt,
         device=device,
-        load_ckpt_weights=not args.no_load_weights,
+        load_ckpt_weights=load_ckpt_weights,
         use_unipc=args.use_unipc,
         use_src_id_rotary_emb=args.use_src_tgt_id,
     )

@@ -464,9 +464,8 @@ def create_ui():
 def parse_args():
     parser = argparse.ArgumentParser(description="Bernini Renderer Gradio demo")
     parser.add_argument("--config", default="configs/bernini_renderer_wan22")
-    parser.add_argument("--high_noise_ckpt", required=True)
-    parser.add_argument("--low_noise_ckpt", required=True)
-    parser.add_argument("--no_load_weights", action="store_true")
+    parser.add_argument("--high_noise_ckpt", default=None)
+    parser.add_argument("--low_noise_ckpt", default=None)
     parser.add_argument("--use_unipc", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--use_src_tgt_id", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ulysses", type=int, default=1)
@@ -510,12 +509,28 @@ def main():
         from bernini.parallel import init_parallel_state
         init_parallel_state(ulysses_size=args.ulysses)
 
+    # When the checkpoints are not both given, the Bernini weights are expected
+    # to live directly in --config (a diffusers-format dir whose
+    # transformer/transformer_2 already hold the Bernini weights), so the
+    # separate checkpoint load is skipped.
+    if (args.high_noise_ckpt is None) != (args.low_noise_ckpt is None):
+        raise ValueError(
+            "--high_noise_ckpt and --low_noise_ckpt must be given together; "
+            "got only one of them"
+        )
+    load_ckpt_weights = args.high_noise_ckpt is not None and args.low_noise_ckpt is not None
+    if not load_ckpt_weights:
+        logger.info(
+            "no --high_noise_ckpt/--low_noise_ckpt given; loading Bernini weights directly "
+            "from the diffusers-format dir '%s' (transformer/transformer_2)", args.config
+        )
+
     PIPELINE = BerniniRendererPipeline.from_pretrained(
         args.config,
         high_noise_ckpt=args.high_noise_ckpt,
         low_noise_ckpt=args.low_noise_ckpt,
         device=DEVICE,
-        load_ckpt_weights=not args.no_load_weights,
+        load_ckpt_weights=load_ckpt_weights,
         use_unipc=args.use_unipc,
         use_src_id_rotary_emb=args.use_src_tgt_id,
     )
