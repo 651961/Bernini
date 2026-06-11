@@ -18,7 +18,9 @@ import argparse
 import json
 import logging
 
-from .pipeline import BerniniRendererPipeline
+from transformers import PretrainedConfig
+
+from .pipeline import BerniniRendererPipeline, BerniniPipeline
 from .prompt_enhancer import get_system_prompt_for_task
 
 # Standard Wan2.2 negative prompt; suppresses common quality / anatomy
@@ -29,9 +31,8 @@ DEFAULT_NEG_PROMPT = (
     "画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，"
     "杂乱的背景，三条腿，背景人很多，倒着走"
 )
-
 # Allowed --guidance_mode values, shared by argparse and the case-file loader.
-GUIDANCE_MODES = ["rv2v", "v2v", "v2v_chain", "t2v", "r2v_apg", "v2v_apg", "t2v_apg"]
+GUIDANCE_MODES = ["rv2v", "v2v", "v2v_chain", "t2v", "r2v_apg", "v2v_apg", "t2v_apg", "vae_txt_vit_wapg", "rv2v_wapg"]
 
 # Keys a case file under assets/testcases/ may set: one example's routing and
 # inputs. Generation params (seed, num_frames, omega_*, ...) stay on the CLI.
@@ -40,7 +41,11 @@ CASE_KEYS = ("task_type", "guidance_mode", "prompt", "video", "image", "images",
 
 def add_common_args(parser):
     g = parser.add_argument_group("model")
-    g.add_argument("--config", default="configs/bernini_renderer_wan22", help="model config directory")
+    g.add_argument(
+        "--config",
+        default="configs/bernini_renderer_wan22",
+        help="model config directory or you can pass the Diffusers directory to load model directly",
+    )
     g.add_argument("--high_noise_ckpt", default=None, help="high-noise checkpoint (dir or HF repo)")
     g.add_argument("--low_noise_ckpt", default=None, help="low-noise checkpoint (dir or HF repo)")
     g.add_argument("--use_unipc", action=argparse.BooleanOptionalAction, default=True,
@@ -68,14 +73,35 @@ def add_common_args(parser):
                    help="system prompt prefix (default: auto-selected from --task_type)")
     g.add_argument("--num_frames", type=int, default=81)
     g.add_argument("--max_image_size", type=int, default=848)
-    g.add_argument("--height", type=int, default=480)
-    g.add_argument("--width", type=int, default=848)
+    g.add_argument(
+        "--height",
+        type=int,
+        default=480,
+        help=(
+            "output height. For Bernini: if --height/--width are positive, they override the output size; "
+            "if both are 0, the output uses the input video's resolution"
+        ),
+    )
+    g.add_argument(
+        "--width",
+        type=int,
+        default=848,
+        help=(
+            "output width. For Bernini: if --height/--width are positive, they override the output size; "
+            "if both are 0, the output uses the input video's resolution"
+        ),
+    )
     g.add_argument("--num_inference_steps", type=int, default=40)
     g.add_argument("--guidance_mode", default="rv2v", choices=GUIDANCE_MODES)
-    g.add_argument("--omega_V", type=float, default=1.25)
-    g.add_argument("--omega_I", type=float, default=4.5)
-    g.add_argument("--omega_TI", type=float, default=4.0)
+    g.add_argument("--omega_vid", type=float, default=1.25)
+    g.add_argument("--omega_img", type=float, default=4.5)
+    g.add_argument("--omega_txt", type=float, default=4.0)
+    g.add_argument("--omega_tgt", type=float, default=0.5)
     g.add_argument("--omega_scale", type=float, default=0.8)
+    g.add_argument("--planning_step", type=int, default=25)
+    g.add_argument("--vit_txt_cfg", type=float, default=1.2)
+    g.add_argument("--vit_img_cfg", type=float, default=1.0)
+    g.add_argument("--vit_denoising_step", type=int, default=5)
     g.add_argument("--flow_shift", type=float, default=5.0)
     g.add_argument("--seed", type=int, default=42)
     g.add_argument("--fps", type=int, default=16)
@@ -97,32 +123,48 @@ def setup_logging():
     )
 
 
-def build_pipeline(args, device) -> BerniniRendererPipeline:
-    # When the checkpoints are not both given, the Bernini weights are expected
-    # to live directly in --config (a diffusers-format dir whose
-    # transformer/transformer_2 already hold the Bernini weights), so the
-    # separate checkpoint load is skipped.
+def build_pipeline(args, device):
+    config_dict, _ = PretrainedConfig.get_config_dict(args.config)
+    model_type = config_dict.get("model_type")
+
+    if model_type == "bernini":
+        if args.high_noise_ckpt is not None or args.low_noise_ckpt is not None:
+            raise ValueError(
+                "Bernini uses the self-contained Bernini-Diffusers layout; "
+                "pass that directory to --config and omit --high_noise_ckpt/--low_noise_ckpt"
+            )
+        logging.getLogger("bernini.cli").info(
+            "Loading full Bernini directly from the Bernini-Diffusers dir '%s'", args.config
+        )
+        return BerniniPipeline.from_pretrained(
+            args.config,
+            device=device,
+            use_unipc=args.use_unipc,
+            use_src_id_rotary_emb=args.use_src_tgt_id,
+        )
+
     if (args.high_noise_ckpt is None) != (args.low_noise_ckpt is None):
         raise ValueError(
             "--high_noise_ckpt and --low_noise_ckpt must be given together; "
             "got only one of them"
         )
-    load_ckpt_weights = args.high_noise_ckpt is not None and args.low_noise_ckpt is not None
-    if not load_ckpt_weights:
-        logging.getLogger("bernini.cli").info(
-            "no --high_noise_ckpt/--low_noise_ckpt given; loading Bernini weights directly "
-            "from the diffusers-format dir '%s' (transformer/transformer_2)", args.config
+    else:
+        load_ckpt_weights = args.high_noise_ckpt is not None and args.low_noise_ckpt is not None
+        if not load_ckpt_weights:
+            logging.getLogger("bernini.cli").info(
+                "no --high_noise_ckpt/--low_noise_ckpt given; loading Bernini weights directly "
+                "from the diffusers-format dir '%s' (transformer/transformer_2)", args.config
+            )
+        return BerniniRendererPipeline.from_pretrained(
+            args.config,
+            high_noise_ckpt=args.high_noise_ckpt,
+            low_noise_ckpt=args.low_noise_ckpt,
+            device=device,
+            load_ckpt_weights=load_ckpt_weights,
+            use_unipc=args.use_unipc,
+            shift=args.flow_shift,
+            use_src_id_rotary_emb=args.use_src_tgt_id,
         )
-    return BerniniRendererPipeline.from_pretrained(
-        args.config,
-        high_noise_ckpt=args.high_noise_ckpt,
-        low_noise_ckpt=args.low_noise_ckpt,
-        device=device,
-        load_ckpt_weights=load_ckpt_weights,
-        use_unipc=args.use_unipc,
-        shift=args.flow_shift,
-        use_src_id_rotary_emb=args.use_src_tgt_id,
-    )
 
 
 def generation_kwargs(args) -> dict:
@@ -135,10 +177,15 @@ def generation_kwargs(args) -> dict:
         width=args.width,
         num_inference_steps=args.num_inference_steps,
         guidance_mode=args.guidance_mode,
-        omega_V=args.omega_V,
-        omega_I=args.omega_I,
-        omega_TI=args.omega_TI,
+        omega_vid=args.omega_vid,
+        omega_img=args.omega_img,
+        omega_txt=args.omega_txt,
+        omega_tgt=args.omega_tgt,
         omega_scale=args.omega_scale,
+        planning_step=args.planning_step,
+        vit_txt_cfg=args.vit_txt_cfg,
+        vit_img_cfg=args.vit_img_cfg,
+        vit_denoising_step=args.vit_denoising_step,
         flow_shift=args.flow_shift,
         seed=args.seed,
         fps=args.fps,

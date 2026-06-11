@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Copyright (c) 2026 Bytedance Ltd. and/or its affiliate
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,10 +12,12 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+set -euo pipefail
+export NCCL_NET_PLUGIN=none
+export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+export FSDP=1
+BERNINI_CONFIG=${BERNINI_CONFIG:-ByteDance/Bernini-Diffusers}
 
-from .bernini import BerniniConfig, BerniniModel
-from .renderer import BerniniRendererConfig, BerniniRendererModel
-from .transformer_wan import WanTransformer3DModel
-from .wan_diffusion import GEN_Wanx22
-
-__all__ = ["BerniniRendererConfig", "BerniniRendererModel", "WanTransformer3DModel", "GEN_Wanx22"]
+torchrun --nproc-per-node 8 gradio_demo.py --ulysses 8 \
+        --config "$BERNINI_CONFIG" \
+        --port 9500 --share

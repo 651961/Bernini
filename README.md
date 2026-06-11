@@ -16,13 +16,15 @@
 
 ## 🎉 News
 
+- **[2026-06-11]** We open-sourced the inference code and model weights of the full Bernini (**Bernini**).
 - **[2026-06-09]** We open-sourced the **1.3B** weights of the Bernini Renderer (**Bernini-R**) on [ByteDance/Bernini-R-1.3B-Diffusers](https://huggingface.co/ByteDance/Bernini-R-1.3B-Diffusers). Fine-tuned from Wan2.1-1.3B, the model performs close to the 14B variant on simple tasks such as style transfer, subtitle or watermark removal, and local editing, while lagging behind on more complex tasks such as human generation.
 - **[2026-06-01]** We open-sourced the inference code and model weights of the Bernini Renderer (**Bernini-R**).
 - **[2026-05-22]** We released our paper [Bernini: Latent Semantic Planning for Video Diffusion](https://arxiv.org/abs/2605.22344).
 
 ## ✨ Highlights
 
-Bernini is a unified framework for video generation and editing that combines an MLLM-based semantic planner with a DiT-based renderer.
+Bernini is a unified framework for video generation and editing that combines
+an MLLM-based semantic planner with a DiT-based renderer.
 
 On video editing, Bernini reaches the first tier among leading closed-source
 commercial models. The leaderboard below comes from our self-built arena
@@ -30,6 +32,29 @@ platform, where human annotators blindly vote on paired edits and the votes are
 aggregated into a Bradley-Terry score and a pairwise win-rate matrix.
 
 <img src="assets/arena.png" width="900" alt="Video editing arena: Bradley-Terry leaderboard and pairwise win-rate matrix"/>
+
+Benchmark results across the released models:
+
+| Model | EditVerse | OpenVE | OpenS2V | VBench | Bernini-v2v (OS) | Bernini-rv2v (OS) |
+|---|---|---|---|---|---|---|
+| [Bernini-R 1.3B](https://huggingface.co/ByteDance/Bernini-R-1.3B-Diffusers) | 7.74 | 3.65 | 62.18 | 84.69 | 3.15 | 3.21 |
+| [Bernini-R 14B](https://huggingface.co/ByteDance/Bernini-R-Diffusers) | 7.99 | 3.78 | 62.94 | 84.64 | 3.25 | 3.34 |
+| [Bernini 7B+14B](https://huggingface.co/ByteDance/Bernini-Diffusers) | 8.02 | 4.03 | 62.30 | 84.37 | 3.49 | 3.48 |
+
+## 🧾 Models
+
+The repository provides two model families. Pick one and follow its guide for
+weight download, inference commands, and ready-to-run scripts:
+
+|  | **Bernini** | **Bernini-R** |
+|--|-------------|---------------|
+| What it is | Full pipeline: MLLM-based semantic planner + DiT-based renderer | Renderer-only model fine-tuned from the Wan diffusion renderer |
+| Strengths | Decomposes complex instructions and plans semantic changes before rendering; stronger instruction following | Strong rendering and consistency with fewer moving parts; simpler setup |
+| Checkpoints | [`ByteDance/Bernini-Diffusers`](https://huggingface.co/ByteDance/Bernini-Diffusers) | [`ByteDance/Bernini-R-Diffusers`](https://huggingface.co/ByteDance/Bernini-R-Diffusers) (14B) · [`ByteDance/Bernini-R-1.3B-Diffusers`](https://huggingface.co/ByteDance/Bernini-R-1.3B-Diffusers) · [`ByteDance/Bernini-R`](https://huggingface.co/ByteDance/Bernini-R) (separate ckpts) |
+| Guide | **[docs/bernini.md](docs/bernini.md)** | **[docs/bernini_r.md](docs/bernini_r.md)** |
+
+Both families share the same task interface: `t2i`, `i2i`, `t2v`, `v2v`,
+`rv2v`, and `r2v`.
 
 ## 📦 Installation
 
@@ -43,7 +68,7 @@ aggregated into a Bradley-Terry score and a pairwise win-rate matrix.
 - Pinned in `requirements.txt`: `torch==2.5.1+cu124`, `diffusers==0.35.2`,
   `accelerate==0.34.2`, `transformers==4.57.3`.
 
-Reference environment (Bernini-R is developed and tested on this setup):
+Reference environment (developed and tested on this setup):
 
 | Component | Version      |
 |-----------|--------------|
@@ -61,12 +86,13 @@ pip install -r requirements.txt
 
 Optional extras:
 
-- **Multi-GPU sequence parallel** needs [Open-VeOmni](https://github.com/ByteDance-Seed/VeOmni)
-  (Apache-2.0, Python 3.11). Use `--no-deps` so VeOmni does not pull in a
-  different torch build and override the pinned `torch==2.5.1+cu124`:
+- **Full Bernini and multi-GPU sequence parallelism** need
+  [Open-VeOmni](https://github.com/ByteDance-Seed/VeOmni) (Apache-2.0,
+  Python 3.11). Use `--no-deps` so VeOmni does not pull in a different torch
+  build and override the pinned `torch==2.5.1+cu124`:
   `pip install --no-deps git+https://github.com/ByteDance-Seed/VeOmni.git@v0.1.10`.
-  Single-GPU inference does not need it.
-- **Faster attention** (auto-detected if installed; otherwise PyTorch SDPA is used):
+  Single-GPU Bernini-R inference does not need it.
+- **Faster attention** (FlashAttention-2 by default):
   - FlashAttention-2 — general CUDA GPUs (incl. A100/A800): `pip install flash-attn==2.8.3`.
   - FlashAttention-3 — Hopper only (H100/H800/H200, CUDA ≥ 12.3, PyTorch ≥ 2.4).
     `flash_attn_interface` is not on PyPI; build it from the
@@ -78,70 +104,21 @@ Optional extras:
     cd hopper && MAX_JOBS=$(nproc) python3 setup.py install --user
     ```
 
-### Weights
-
-#### Model Performance
-
-| Model | EditVerse | OpenVE | OpenS2V | VBench | Bernini-v2v (OS) | Bernini-vr2v (OS) |
-|---|---|---|---|---|---|---|
-| [Bernini-R 1.3B](https://huggingface.co/ByteDance/Bernini-R-1.3B-Diffusers) | 7.74 | 3.65 | 62.18 | 84.69 | 3.15 | 3.21 |
-| [Bernini-R 14B](https://huggingface.co/ByteDance/Bernini-R-Diffusers) | 7.99 | 3.78 | 62.94 | 84.64 | 3.25 | 3.34 |
-
-Bernini-R provides two ways to obtain the renderer weights. The **diffusers
-format is recommended** — it is a self-contained diffusers-format directory whose
-`transformer` / `transformer_2` already hold the Bernini-R weights, so you point
-`--config` at it and the weights load directly, with **no** `--high_noise_ckpt` /
-`--low_noise_ckpt` needed.
-
-#### Option A — diffusers format (recommended)
-
-A single ready-to-use diffusers-format model from
-[`ByteDance/Bernini-R-Diffusers`](https://huggingface.co/ByteDance/Bernini-R-Diffusers).
-It bundles the Wan2.2 base components (VAE, UMT5 text encoder, tokenizer) together
-with the Bernini-R transformer weights, so nothing else is downloaded at runtime.
-
-```bash
-pip install -U "huggingface_hub"
-hf download ByteDance/Bernini-R-Diffusers --local-dir Bernini-R-Diffusers
-```
-
-Then pass it via `--config` and omit the checkpoint flags, e.g.:
-
-```bash
-python infer_single_gpu.py --config Bernini-R-Diffusers \
-    --case assets/testcases/t2i/t2i.json --num_frames 1
-```
-
-#### Option B — separate checkpoints
-
-The original layout, where Bernini-R uses two sets of weights loaded separately:
-
-1. **Wan2.2 base** — [`Wan-AI/Wan2.2-T2V-A14B-Diffusers`](https://huggingface.co/Wan-AI/Wan2.2-T2V-A14B-Diffusers) on Hugging Face. Supplies the
-   VAE, UMT5 text encoder, tokenizer, and the transformer architecture/base weights.
-   It is downloaded automatically on first run (configured by `wan22_base` in
-   `configs/bernini_renderer_wan22/config.json`).
-2. **Bernini-R checkpoint** — the trained high-noise / low-noise transformer weights
-   (safetensors) from [ByteDance/Bernini-R](https://huggingface.co/ByteDance/Bernini-R), passed with
-   `--high_noise_ckpt` / `--low_noise_ckpt`. Both a local directory and a Hugging
-   Face repo id are accepted.
-
-Download models using huggingface-cli:
-
-```bash
-pip install -U "huggingface_hub"
-hf download Wan-AI/Wan2.2-T2V-A14B-Diffusers --local-dir Wan2.2-T2V-A14B-Diffusers
-hf download ByteDance/Bernini-R --local-dir Bernini-R
-```
-
 ## 🚀 Usage
+
+Weight download and per-task inference commands are model-specific — follow
+**[docs/bernini.md](docs/bernini.md)** or
+**[docs/bernini_r.md](docs/bernini_r.md)**. The pieces below are shared by both
+pipelines.
+
+### Case files
 
 A run is described by a **case file** — a small JSON under
 [`assets/testcases/`](assets/testcases/) that bundles one task's routing and
 inputs (`task_type`, `guidance_mode`, `prompt`, source media, `output`). This
 keeps long prompts out of the command line. Each task has a directory under
-`assets/testcases/` holding one or more case files; see
-[`assets/testcases/`](assets/testcases/) for the format and the bundled
-`t2i` / `i2i` / `t2v` / `v2v` / `rv2v` /`r2v` examples.
+`assets/testcases/` with one or more bundled examples; see the
+[case-file format](assets/testcases/README.md).
 
 ### Prompt enhancer (highly recommended)
 
@@ -155,115 +132,18 @@ export BERNINI_PE_BASE_URL=...     # or OPENAI_BASE_URL
 export BERNINI_PE_MODEL=...        # vision-capable chat model
 ```
 
-### Examples by task type
-
-Unless an example specifies otherwise, inference outputs **480p / 16fps** (the
-defaults — `--max_image_size 848`, `--fps 16`).
-
-Each example runs a bundled case in
-[`assets/testcases/`](assets/testcases/) — replace `<hi>` / `<lo>` with your
-high-/low-noise checkpoint paths. The image tasks (`t2i`, `i2i`) are shown on a
-single GPU; the video tasks on 8 GPUs via `torchrun`, where `--ulysses N` gives
-N-way Ulysses sequence parallel per sample and the remaining `world_size / N`
-ranks run data parallel over the task list. The two scripts take the same
-inputs, so any example can be run either way.
-
-Inputs can also be passed directly as flags instead of `--case` (`--prompt`,
-`--task_type`, `--guidance_mode`, `--video`, `--image`, `--images`,
-`--output`); generation parameters (`--seed`, `--num_frames`, ...) are always
-command-line flags.
-
-**Text-to-image** (`t2i`) — single GPU; generates one frame, so pass `--num_frames 1`
-
-```bash
-python infer_single_gpu.py --high_noise_ckpt <hi> --low_noise_ckpt <lo> \
-    --case assets/testcases/t2i/t2i.json --num_frames 1
-```
-
-**Image editing** (`i2i`) — single GPU; generates one frame, so pass `--num_frames 1`
-
-```bash
-python infer_single_gpu.py --high_noise_ckpt <hi> --low_noise_ckpt <lo> \
-    --case assets/testcases/i2i/i2i.json --num_frames 1
-```
-
-**Text-to-video** (`t2v`)
-
-```bash
-torchrun --nproc-per-node 8 infer_multi_gpu.py \
-    --high_noise_ckpt <hi> --low_noise_ckpt <lo> --ulysses 8 \
-    --case assets/testcases/t2v/t2v.json
-```
-
-**Video editing** (`v2v` / `mv2v`) — two cases are provided.
-
-For edits where the main subject keeps its ordinary motion (case 1 adds a
-snowman to the scene), the `v2v` task type is enough:
-
-```bash
-torchrun --nproc-per-node 8 infer_multi_gpu.py \
-    --high_noise_ckpt <hi> --low_noise_ckpt <lo> --ulysses 8 \
-    --case assets/testcases/v2v/v2v_case1.json
-```
-
-For edits that need to change the subject's motion (case 2 makes the person
-crouch down), the `mv2v` task type gives better results:
-
-```bash
-torchrun --nproc-per-node 8 infer_multi_gpu.py \
-    --high_noise_ckpt <hi> --low_noise_ckpt <lo> --ulysses 8 \
-    --case assets/testcases/v2v/v2v_case2.json
-```
-
-**Reference + video editing** (`rv2v`) — two cases are provided.
-
-Case 1 is reference-image-guided video editing — replacing a garment in the
-source video with one from a reference image:
-
-```bash
-torchrun --nproc-per-node 8 infer_multi_gpu.py \
-    --high_noise_ckpt <hi> --low_noise_ckpt <lo> --ulysses 8 \
-    --case assets/testcases/rv2v/rv2v_case1.json
-```
-
-Case 2 is a video-insertion example — inserting content into the source video.
-It is run at 720p / 24fps to show the insertion result more clearly:
-
-```bash
-torchrun --nproc-per-node 8 infer_multi_gpu.py \
-    --high_noise_ckpt <hi> --low_noise_ckpt <lo> --ulysses 8 \
-    --case assets/testcases/rv2v/rv2v_case2.json \
-    --num_frames 121 --fps 24 --max_image_size 1280
-```
-
-**Reference-to-video** (`r2v`) — drives a video from one or more reference images
-
-```bash
-torchrun --nproc-per-node 8 infer_multi_gpu.py \
-    --high_noise_ckpt <hi> --low_noise_ckpt <lo> --ulysses 8 \
-    --case assets/testcases/r2v/r2v.json
-```
-
-See `python infer_single_gpu.py --help` for the full argument list.
-
 ### Gradio demo
 
-`gradio_demo.py` exposes the same pipeline through a Gradio UI: the task-type
-dropdown auto-fills `guidance_mode` (still user-editable), uploaded media is
-routed to the matching slot, and the result is rendered inline.
+`gradio_demo.py` exposes the same pipeline through a Gradio UI for both
+**Bernini** and **Bernini-R**: the task-type dropdown auto-fills
+`guidance_mode` (still user-editable), uploaded media is routed to the matching
+slot, and the result is rendered inline. Launch commands are in each model's
+guide ([Bernini](docs/bernini.md#gradio-demo) ·
+[Bernini-R](docs/bernini_r.md#gradio-demo)).
 
-```bash
-# Single GPU
-python gradio_demo.py --high_noise_ckpt <hi> --low_noise_ckpt <lo> --port 7860
-
-# 8 GPUs, 8-way Ulysses sequence parallel
-torchrun --nproc-per-node 8 gradio_demo.py --ulysses 8 \
-    --high_noise_ckpt <hi> --low_noise_ckpt <lo> --port 7860 --share
-```
-
-Add `--use_pe` (and `export OPENAI_API_KEY=...` / `BERNINI_PE_API_KEY=...`) to
-enable GPT prompt enhancement; the in-UI checkbox is a per-request switch on
-top of this flag.
+Add `--use_pe` (with the prompt-enhancer environment variables above) to enable
+prompt enhancement; the in-UI checkbox is a per-request switch on top of this
+flag.
 
 ## 📑 Citation
 

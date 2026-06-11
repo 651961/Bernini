@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Copyright (c) 2026 Bytedance Ltd. and/or its affiliate
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -11,10 +12,9 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+set -euo pipefail
+CASE_PATH=${CASE_PATH:-assets/testcases/t2i/t2i.json}
+BERNINI_R_CONFIG=${BERNINI_R_CONFIG:-./pretrained_models/Bernini-R-Diffusers}
 
-from .bernini import BerniniConfig, BerniniModel
-from .renderer import BerniniRendererConfig, BerniniRendererModel
-from .transformer_wan import WanTransformer3DModel
-from .wan_diffusion import GEN_Wanx22
-
-__all__ = ["BerniniRendererConfig", "BerniniRendererModel", "WanTransformer3DModel", "GEN_Wanx22"]
+python infer_single_gpu.py --config "$BERNINI_R_CONFIG" \
+    --case "$CASE_PATH" --num_frames 1 --guidance_mode t2v_apg
