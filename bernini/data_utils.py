@@ -14,7 +14,10 @@
 
 """Video / image reading and VAE preprocessing."""
 
+import io
+import json
 import math
+import os
 from typing import List, Union
 
 import decord
@@ -84,7 +87,9 @@ class VAEVideoTransform:
         self.normalize_transform = transforms.Normalize(mean=list(image_mean), std=list(image_std), inplace=True)
 
     def __call__(self, img):
-        if not isinstance(img, Image.Image):
+        if isinstance(img, str):
+            img = Image.open(img).convert("RGB")
+        elif not isinstance(img, Image.Image):
             img = Image.fromarray(img).convert("RGB")
         else:
             img = img.convert("RGB")
@@ -147,6 +152,37 @@ class VideoFrameReader:
         return [Image.fromarray(f).convert("RGB") for f in frames]
 
 
+class FakeVideoReader:
+    """
+    A fake video reader that generates zero/black frames based on t, h, w.
+    Compatible with PathVideoReader interface.
+    """
+
+    def __init__(self, num_frames: int, height: int, width: int, fps: int = 16):
+        """
+        Args:
+            num_frames: number of frames (t)
+            height: frame height (h)
+            width: frame width (w)
+            fps: frames per second
+        """
+        self.length = num_frames
+        self.fps = fps
+        self.height = height
+        self.width = width
+        self._frame = Image.new("RGB", (width, height), color=0)
+
+    def sample(self, frame_indices: List[int]) -> List[Image.Image]:
+        """Return fake frames for the given indices."""
+        indices = [max(0, min(int(i), self.length - 1)) for i in frame_indices]
+        return [self._frame.copy() for _ in indices]
+
+
+def create_fake_image(height: int, width: int) -> Image.Image:
+    """Create a fake (black/zero) RGB image with the given dimensions."""
+    return Image.new("RGB", (width, height), color=0)
+
+
 def preprocess_video(
     video_path, fps=16, max_image_size=624, min_image_size=1, max_image_num=81,
     torch_dtype=torch.float32, device="cuda",
@@ -186,3 +222,101 @@ def preprocess_images(images, max_image_size=624, min_image_size=1,
     frames = [transform(_load_image(img)) for img in images]
     video_tensor = torch.stack(frames, dim=0).permute(1, 0, 2, 3).unsqueeze(0)
     return video_tensor.to(dtype=torch_dtype, device=device)
+
+def generate_unified_inputs(
+    prompt,
+    input_image_paths=None,
+    input_video_paths=None,
+    has_video_input=False,
+    output_t=None,
+    output_h=None,
+    output_w=None,
+):
+    input_image_paths = [path for path in (input_image_paths or []) if path is not None]
+    if input_video_paths is None:
+        input_video_paths = [None] if has_video_input else []
+    else:
+        input_video_paths = [path for path in input_video_paths if path is not None]
+
+    video_index = 0
+    inputs_structure = [{'type': 'special_token', 'text': '[CLS]', 'has_loss': 0}]
+
+    for _ in input_video_paths:
+        inputs_structure.append({
+            "type": "video",
+            "video_index": video_index,
+            "decode_mode": "video"
+        })
+        video_index += 1
+
+    if len(input_image_paths) > 0:
+        for i, input_image_path in enumerate(input_image_paths):
+            if input_image_path is None:
+                continue
+            if os.path.exists(input_image_path):
+                with Image.open(input_image_path) as src_img:
+                    w, h = src_img.size
+
+            idx = i + len(input_video_paths)
+            inputs_structure.append({
+                "type": "image",
+                "image_index": idx,
+                "height": h,
+                "width": w,
+            })
+    
+    inputs_structure.append({'type': 'text', 'text': prompt, 'has_loss': 0})
+    
+    if output_t == 1: 
+        # --- Image Generation ---
+        inputs_structure.extend([{"type": "special_token", "text": "[SOG]", "has_loss": 1}])
+        
+        target_idx = len(input_image_paths) if input_image_paths else 0
+        inputs_structure.append({
+            "type": "image_gen",
+            "image_index": target_idx,
+            "height": output_h,
+            "width": output_w,
+            "has_loss": 1,
+        })
+        inputs_structure.extend([{"type": "special_token", "text": "[EOG]", "has_loss": 1}])
+    else:
+        # --- Video Generation (v2v / vi2v) ---
+        inputs_structure.extend([{"type": "special_token", "text": "[SOV]", "has_loss": 1}])
+
+        inputs_structure.append({
+            "type": "video_gen",
+            "video_index": video_index,
+            "decode_mode": "video"
+        })
+        inputs_structure.extend([{"type": "special_token", "text": "[EOV]", "has_loss": 1}])
+    inputs_structure.append({'type': 'special_token', 'text': '[EOS]', 'has_loss': 1})
+    return json.dumps(inputs_structure, ensure_ascii=False)
+
+def tensor_to_bytes(x):
+    buffer = io.BytesIO()
+    torch.save(x, buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def get_vit_features(mllm_model, pixel_values, image_grid_thw):
+    pixel_values = pixel_values.type(mllm_model.dtype).to(mllm_model.device)
+    image_grid_thw = image_grid_thw.to(mllm_model.device)
+    with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.bfloat16):
+        image_embeds = mllm_model.visual(pixel_values, grid_thw=image_grid_thw)
+    split_sizes = (image_grid_thw.prod(-1) //
+                   mllm_model.visual.spatial_merge_size**2).tolist()
+    image_embeds = torch.split(image_embeds, split_sizes)
+    return image_embeds
+
+def get_vae_features(vae_model, x):
+    if x.ndim == 3:
+        x = x.unsqueeze(1)
+    elif x.ndim != 4:
+        raise ValueError(f"Expected image/video tensor with 3 or 4 dims, got shape={tuple(x.shape)}")
+    x = x.unsqueeze(0).type(vae_model.dtype).to(vae_model.device)
+    with torch.no_grad(), torch.amp.autocast("cuda", dtype=torch.float32):
+        latent_dist = vae_model.encode(x).latent_dist
+    latent_dist = latent_dist.parameters.detach().cpu()
+    return tensor_to_bytes(latent_dist)

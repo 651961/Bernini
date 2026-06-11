@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Bernini Renderer Gradio demo.
+"""Bernini / Bernini-R Gradio demo.
 
 One task type per request; the guidance mode is derived automatically from
 the task type (see ``GUIDANCE_MODE_BY_TASK`` below). Image tasks (``t2i`` /
@@ -22,9 +22,18 @@ Single-GPU:
     python gradio_demo.py \\
         --high_noise_ckpt <path-or-hf-repo> --low_noise_ckpt <path-or-hf-repo>
 
+Single-GPU full Bernini:
+    python gradio_demo.py \\
+        --config ByteDance/Bernini-Diffusers
+
 Multi-GPU with Ulysses sequence parallel (Open-VeOmni required):
     torchrun --nproc-per-node 8 gradio_demo.py --ulysses 8 \\
         --high_noise_ckpt <path-or-hf-repo> --low_noise_ckpt <path-or-hf-repo> \\
+        --port 7860 --share
+
+Multi-GPU full Bernini with Ulysses sequence parallel:
+    torchrun --nproc-per-node 8 gradio_demo.py --ulysses 8 \\
+        --config ByteDance/Bernini-Diffusers \\
         --port 7860 --share
 """
 
@@ -39,8 +48,8 @@ import gradio as gr
 import torch
 import torch.distributed as dist
 
-from bernini.cli import DEFAULT_NEG_PROMPT, GUIDANCE_MODES
-from bernini.pipeline import BerniniRendererPipeline
+from bernini.cli import DEFAULT_NEG_PROMPT, GUIDANCE_MODES, build_pipeline
+from bernini.pipeline import BerniniPipeline
 from bernini.prompt_enhancer import get_system_prompt_for_task
 
 
@@ -81,12 +90,154 @@ TASK_INPUTS = {
 
 IMAGE_TASKS = {"t2i", "i2i"}
 
+BASE_TASK_DEFAULTS = {
+    "max_image_size": 848,
+    "num_inference_steps": 40,
+    "num_frames": 81,
+    "flow_shift": 5.0,
+    "seed": 42,
+    "fps": 16,
+    "height": 480,
+    "width": 848,
+    "omega_vid": 1.25,
+    "omega_img": 4.5,
+    "omega_txt": 4.0,
+    "omega_tgt": 0.5,
+    "omega_scale": 0.8,
+    "eta": 0.5,
+    "momentum": 0.0,
+    "planning_step": 25,
+    "vit_txt_cfg": 1.2,
+    "vit_img_cfg": 1.0,
+    "vit_denoising_step": 5,
+}
+
+RENDERER_TASK_DEFAULTS = {
+    "t2i": {"num_frames": 1, "guidance_mode": "t2v_apg"},
+    "i2i": {"num_frames": 1, "guidance_mode": "v2v"},
+    "t2v": {"guidance_mode": "t2v_apg"},
+    "v2v": {"guidance_mode": "v2v_apg"},
+    "mv2v": {"guidance_mode": "v2v_apg"},
+    "r2v": {"guidance_mode": "r2v_apg"},
+    "rv2v": {"guidance_mode": "rv2v"},
+    "ads2v": {"guidance_mode": "v2v_apg"},
+}
+
+FULL_BERNINI_TASK_DEFAULTS = {
+    "t2i": {
+        "guidance_mode": "vae_txt_vit_wapg",
+        "num_frames": 1,
+        "max_image_size": 842,
+        "height": 512,
+        "width": 512,
+        "num_inference_steps": 50,
+        "omega_vid": 1.0,
+        "omega_img": 1.0,
+        "omega_txt": 4.0,
+        "omega_tgt": 0.5,
+        "omega_scale": 1.0,
+    },
+    "i2i": {
+        "guidance_mode": "vae_txt_vit_wapg",
+        "num_frames": 1,
+        "max_image_size": 842,
+        "height": 512,
+        "width": 512,
+        "num_inference_steps": 40,
+        "omega_vid": 1.25,
+        "omega_img": 1.25,
+        "omega_txt": 4.0,
+        "omega_tgt": 0.5,
+        "omega_scale": 0.75,
+    },
+    "t2v": {
+        "guidance_mode": "vae_txt_vit_wapg",
+        "num_frames": 81,
+        "max_image_size": 842,
+        "height": 480,
+        "width": 848,
+        "num_inference_steps": 50,
+        "omega_vid": 1.0,
+        "omega_img": 1.0,
+        "omega_txt": 4.0,
+        "omega_tgt": 0.5,
+        "omega_scale": 1.0,
+    },
+    "v2v": {
+        "guidance_mode": "vae_txt_vit_wapg",
+        "num_frames": 81,
+        "max_image_size": 848,
+        "num_inference_steps": 40,
+        "omega_vid": 1.25,
+        "omega_img": 1.25,
+        "omega_txt": 4.0,
+        "omega_tgt": 0.5,
+        "omega_scale": 0.75,
+    },
+    "mv2v": {
+        "guidance_mode": "vae_txt_vit_wapg",
+        "num_frames": 81,
+        "max_image_size": 848,
+        "num_inference_steps": 40,
+        "omega_vid": 1.25,
+        "omega_img": 1.25,
+        "omega_txt": 4.0,
+        "omega_tgt": 0.5,
+        "omega_scale": 0.75,
+    },
+    "rv2v": {
+        "guidance_mode": "rv2v",
+        "num_frames": 81,
+        "max_image_size": 842,
+        "num_inference_steps": 40,
+        "omega_vid": 0.75,
+        "omega_img": 3.0,
+        "omega_txt": 4.0,
+        "omega_tgt": 1.5,
+        "omega_scale": 0.75,
+    },
+    "r2v": {
+        "guidance_mode": "rv2v",
+        "num_frames": 81,
+        "max_image_size": 842,
+        "num_inference_steps": 40,
+        "omega_vid": 1.25,
+        "omega_img": 2.5,
+        "omega_txt": 4.0,
+        "omega_tgt": 1.5,
+        "omega_scale": 0.8,
+    },
+    "ads2v": {
+        "guidance_mode": "vae_txt_vit_wapg",
+        "num_frames": 81,
+        "max_image_size": 848,
+        "num_inference_steps": 40,
+        "omega_vid": 1.25,
+        "omega_img": 1.25,
+        "omega_txt": 4.0,
+        "omega_tgt": 0.5,
+        "omega_scale": 0.75,
+    },
+}
+
 
 # Filled in main().
 PIPELINE = None
 DEVICE = None
 SAVE_BASE = None
 REWRITER = None
+
+
+def _is_full_bernini_pipeline() -> bool:
+    return isinstance(PIPELINE, BerniniPipeline)
+
+
+def _task_defaults(task_type: str) -> dict:
+    defaults = dict(BASE_TASK_DEFAULTS)
+    table = FULL_BERNINI_TASK_DEFAULTS if _is_full_bernini_pipeline() else RENDERER_TASK_DEFAULTS
+    defaults.update(table.get(task_type, {}))
+    defaults.setdefault("guidance_mode", GUIDANCE_MODE_BY_TASK.get(task_type))
+    return defaults
 
 
 # ---------------------------------------------------------------------------
@@ -152,12 +303,17 @@ def _build_kwargs(
     fps,
     height,
     width,
-    omega_V,
-    omega_I,
-    omega_TI,
+    omega_vid,
+    omega_img,
+    omega_txt,
+    omega_tgt,
     omega_scale,
     eta,
     momentum,
+    planning_step,
+    vit_txt_cfg,
+    vit_img_cfg,
+    vit_denoising_step,
 ):
     needs = TASK_INPUTS[task_type]
     video = _coerce_video_paths(video_input) if needs["video"] else None
@@ -175,27 +331,34 @@ def _build_kwargs(
     if task_type in IMAGE_TASKS:
         num_frames = 1
 
+    task_defaults = _task_defaults(task_type)
+
     return dict(
         prompt=prompt or "",
         neg_prompt=DEFAULT_NEG_PROMPT,
         video=video,
         image=image,
         images=images,
-        max_image_size=int(max_image_size),
-        num_inference_steps=int(num_inference_steps),
-        num_frames=int(num_frames),
-        flow_shift=float(flow_shift),
-        seed=int(seed),
-        fps=int(fps),
-        height=int(height),
-        width=int(width),
-        guidance_mode=guidance_mode or GUIDANCE_MODE_BY_TASK[task_type],
-        omega_V=float(omega_V),
-        omega_I=float(omega_I),
-        omega_TI=float(omega_TI),
-        omega_scale=float(omega_scale),
-        eta=float(eta),
-        momentum=float(momentum),
+        max_image_size=int(max_image_size if max_image_size is not None else task_defaults["max_image_size"]),
+        num_inference_steps=int(num_inference_steps if num_inference_steps is not None else task_defaults["num_inference_steps"]),
+        num_frames=int(num_frames if num_frames is not None else task_defaults["num_frames"]),
+        flow_shift=float(flow_shift if flow_shift is not None else task_defaults["flow_shift"]),
+        seed=int(seed if seed is not None else task_defaults["seed"]),
+        fps=int(fps if fps is not None else task_defaults["fps"]),
+        height=int(height if height is not None else task_defaults["height"]),
+        width=int(width if width is not None else task_defaults["width"]),
+        guidance_mode=guidance_mode or task_defaults["guidance_mode"],
+        omega_vid=float(omega_vid if omega_vid is not None else task_defaults["omega_vid"]),
+        omega_img=float(omega_img if omega_img is not None else task_defaults["omega_img"]),
+        omega_txt=float(omega_txt if omega_txt is not None else task_defaults["omega_txt"]),
+        omega_tgt=float(omega_tgt if omega_tgt is not None else task_defaults["omega_tgt"]),
+        omega_scale=float(omega_scale if omega_scale is not None else task_defaults["omega_scale"]),
+        eta=float(eta if eta is not None else task_defaults["eta"]),
+        momentum=float(momentum if momentum is not None else task_defaults["momentum"]),
+        planning_step=int(planning_step if planning_step is not None else task_defaults["planning_step"]),
+        vit_txt_cfg=float(vit_txt_cfg if vit_txt_cfg is not None else task_defaults["vit_txt_cfg"]),
+        vit_img_cfg=float(vit_img_cfg if vit_img_cfg is not None else task_defaults["vit_img_cfg"]),
+        vit_denoising_step=int(vit_denoising_step if vit_denoising_step is not None else task_defaults["vit_denoising_step"]),
         system_prompt=get_system_prompt_for_task(task_type),
     )
 
@@ -204,6 +367,19 @@ def _broadcast(request):
     if dist.is_initialized() and dist.get_world_size() > 1:
         data = [request]
         dist.broadcast_object_list(data, src=0, device=torch.device("cpu"))
+
+
+def _run_pipeline(task_type: str, *, write_output: bool, kwargs: dict):
+    if _is_full_bernini_pipeline():
+        full_kwargs = dict(kwargs)
+        if isinstance(full_kwargs.get("video"), list):
+            full_kwargs["video"] = [v for v in full_kwargs["video"] if v is not None]
+            if len(full_kwargs["video"]) == 0:
+                full_kwargs["video"] = None
+            elif len(full_kwargs["video"]) == 1:
+                full_kwargs["video"] = full_kwargs["video"][0]
+        return PIPELINE(task_type, write_output=write_output, **full_kwargs)
+    return PIPELINE(write_output=write_output, **kwargs)
 
 
 def _run_pe_on_rank0(task_type, prompt, video, image, images):
@@ -237,12 +413,17 @@ def generate_handler(
     fps,
     height,
     width,
-    omega_V,
-    omega_I,
-    omega_TI,
+    omega_vid,
+    omega_img,
+    omega_txt,
+    omega_tgt,
     omega_scale,
     eta,
     momentum,
+    planning_step,
+    vit_txt_cfg,
+    vit_img_cfg,
+    vit_denoising_step,
     progress=gr.Progress(),
 ):
     if not task_type:
@@ -257,7 +438,8 @@ def generate_handler(
         guidance_mode,
         max_image_size, num_inference_steps, num_frames, flow_shift,
         seed, fps, height, width,
-        omega_V, omega_I, omega_TI, omega_scale, eta, momentum,
+        omega_vid, omega_img, omega_txt, omega_tgt, omega_scale, eta, momentum,
+        planning_step, vit_txt_cfg, vit_img_cfg, vit_denoising_step,
     )
 
     if use_pe and REWRITER is not None:
@@ -281,10 +463,10 @@ def generate_handler(
         kwargs["num_frames"], kwargs["width"], kwargs["height"],
     )
 
-    _broadcast({"action": "generate", "kwargs": dict(kwargs)})
+    _broadcast({"action": "generate", "task_type": task_type, "kwargs": dict(kwargs)})
 
     try:
-        output_path = PIPELINE(write_output=True, **kwargs)
+        output_path = _run_pipeline(task_type, write_output=True, kwargs=kwargs)
     except Exception as e:  # noqa: BLE001
         logger.error("generate failed: %s\n%s", e, traceback.format_exc())
         return None, None, kwargs["prompt"], f"Generation failed: {e}"
@@ -309,7 +491,7 @@ def worker_loop():
         if request.get("action") != "generate":
             continue
         try:
-            PIPELINE(write_output=False, **request["kwargs"])
+            _run_pipeline(request["task_type"], write_output=False, kwargs=request["kwargs"])
         except Exception as e:  # noqa: BLE001
             logger.error("[worker] generate error: %s\n%s", e, traceback.format_exc())
 
@@ -337,17 +519,45 @@ def _task_input_hint(task_type: str) -> str:
 def _on_task_change(task_type: str):
     """Update the guidance_mode dropdown and the input-hint when the user
     picks a task. The dropdown is still user-editable afterwards."""
-    auto = GUIDANCE_MODE_BY_TASK.get(task_type) if task_type else None
-    return gr.update(value=auto), _task_input_hint(task_type)
+    if not task_type:
+        return (
+            gr.update(value=None), "", *(gr.update() for _ in range(19))
+        )
+    defaults = _task_defaults(task_type)
+    return (
+        gr.update(value=defaults.get("guidance_mode")),
+        _task_input_hint(task_type),
+        gr.update(value=defaults["max_image_size"]),
+        gr.update(value=defaults["num_frames"]),
+        gr.update(value=defaults["num_inference_steps"]),
+        gr.update(value=defaults["flow_shift"]),
+        gr.update(value=defaults["seed"]),
+        gr.update(value=defaults["fps"]),
+        gr.update(value=defaults["height"]),
+        gr.update(value=defaults["width"]),
+        gr.update(value=defaults["omega_vid"]),
+        gr.update(value=defaults["omega_img"]),
+        gr.update(value=defaults["omega_txt"]),
+        gr.update(value=defaults["omega_tgt"]),
+        gr.update(value=defaults["omega_scale"]),
+        gr.update(value=defaults["eta"]),
+        gr.update(value=defaults["momentum"]),
+        gr.update(value=defaults["planning_step"]),
+        gr.update(value=defaults["vit_txt_cfg"]),
+        gr.update(value=defaults["vit_img_cfg"]),
+        gr.update(value=defaults["vit_denoising_step"]),
+    )
 
 
 def create_ui():
     ws = dist.get_world_size() if dist.is_initialized() else 1
-    with gr.Blocks(title="Bernini Renderer Demo") as demo:
-        gr.Markdown("# 🎬 Bernini Renderer Demo")
+    demo_name = "Bernini Demo" if _is_full_bernini_pipeline() else "Bernini-R Demo"
+    with gr.Blocks(title=demo_name) as demo:
+        gr.Markdown(f"# 🎬 {demo_name}")
         gr.Markdown(
-            f"**World size: {ws}** | The selected task type auto-fills "
-            "`guidance_mode` and chooses which media slots are used."
+            f"**World size: {ws}** | Running **{'full Bernini' if _is_full_bernini_pipeline() else 'Bernini-R'}**. "
+            "The selected task type auto-fills `guidance_mode`, chooses which media slots are used, "
+            "and resets task-specific default inference parameters for the current pipeline."
         )
 
         with gr.Row():
@@ -417,13 +627,20 @@ def create_ui():
 
                 with gr.Accordion("Guidance (advanced)", open=False):
                     with gr.Row():
-                        omega_V = gr.Slider(0.0, 10.0, value=1.25, step=0.05, label="omega_V")
-                        omega_I = gr.Slider(0.0, 10.0, value=4.5, step=0.05, label="omega_I")
-                        omega_TI = gr.Slider(0.0, 10.0, value=4.0, step=0.05, label="omega_TI")
+                        omega_vid = gr.Slider(0.0, 10.0, value=1.25, step=0.05, label="omega_vid")
+                        omega_img = gr.Slider(0.0, 10.0, value=4.5, step=0.05, label="omega_img")
+                        omega_txt = gr.Slider(0.0, 10.0, value=4.0, step=0.05, label="omega_txt")
                     with gr.Row():
+                        omega_tgt = gr.Slider(0.0, 10.0, value=0.5, step=0.05, label="omega_tgt")
                         omega_scale = gr.Slider(0.0, 2.0, value=0.8, step=0.05, label="omega_scale")
                         eta = gr.Slider(0.0, 2.0, value=0.5, step=0.05, label="eta")
+                    with gr.Row():
                         momentum = gr.Slider(-2.0, 2.0, value=0.0, step=0.05, label="momentum")
+                        planning_step = gr.Slider(1, 50, value=25, step=1, label="planning_step")
+                        vit_denoising_step = gr.Slider(1, 20, value=5, step=1, label="vit_denoising_step")
+                    with gr.Row():
+                        vit_txt_cfg = gr.Slider(0.0, 3.0, value=1.2, step=0.05, label="vit_txt_cfg")
+                        vit_img_cfg = gr.Slider(0.0, 3.0, value=1.0, step=0.05, label="vit_img_cfg")
 
                 generate_btn = gr.Button("Generate", variant="primary", size="lg")
 
@@ -439,7 +656,13 @@ def create_ui():
         task_type.change(
             fn=_on_task_change,
             inputs=task_type,
-            outputs=[guidance_mode, input_hint],
+            outputs=[
+                guidance_mode, input_hint,
+                max_image_size, num_frames, num_inference_steps, flow_shift,
+                seed, fps, height, width,
+                omega_vid, omega_img, omega_txt, omega_tgt, omega_scale, eta, momentum,
+                planning_step, vit_txt_cfg, vit_img_cfg, vit_denoising_step,
+            ],
         )
 
         generate_btn.click(
@@ -449,7 +672,8 @@ def create_ui():
                 use_pe, guidance_mode,
                 max_image_size, num_inference_steps, num_frames,
                 flow_shift, seed, fps, height, width,
-                omega_V, omega_I, omega_TI, omega_scale, eta, momentum,
+                omega_vid, omega_img, omega_txt, omega_tgt, omega_scale, eta, momentum,
+                planning_step, vit_txt_cfg, vit_img_cfg, vit_denoising_step,
             ],
             outputs=[output_video, output_image, final_prompt, output_status],
         )
@@ -462,12 +686,13 @@ def create_ui():
 # ---------------------------------------------------------------------------
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Bernini Renderer Gradio demo")
+    parser = argparse.ArgumentParser(description="Bernini / Bernini-R Gradio demo")
     parser.add_argument("--config", default="configs/bernini_renderer_wan22")
     parser.add_argument("--high_noise_ckpt", default=None)
     parser.add_argument("--low_noise_ckpt", default=None)
     parser.add_argument("--use_unipc", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--use_src_tgt_id", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--flow_shift", type=float, default=5.0)
     parser.add_argument("--ulysses", type=int, default=1)
 
     parser.add_argument("--port", type=int, default=7860)
@@ -509,31 +734,7 @@ def main():
         from bernini.parallel import init_parallel_state
         init_parallel_state(ulysses_size=args.ulysses)
 
-    # When the checkpoints are not both given, the Bernini weights are expected
-    # to live directly in --config (a diffusers-format dir whose
-    # transformer/transformer_2 already hold the Bernini weights), so the
-    # separate checkpoint load is skipped.
-    if (args.high_noise_ckpt is None) != (args.low_noise_ckpt is None):
-        raise ValueError(
-            "--high_noise_ckpt and --low_noise_ckpt must be given together; "
-            "got only one of them"
-        )
-    load_ckpt_weights = args.high_noise_ckpt is not None and args.low_noise_ckpt is not None
-    if not load_ckpt_weights:
-        logger.info(
-            "no --high_noise_ckpt/--low_noise_ckpt given; loading Bernini weights directly "
-            "from the diffusers-format dir '%s' (transformer/transformer_2)", args.config
-        )
-
-    PIPELINE = BerniniRendererPipeline.from_pretrained(
-        args.config,
-        high_noise_ckpt=args.high_noise_ckpt,
-        low_noise_ckpt=args.low_noise_ckpt,
-        device=DEVICE,
-        load_ckpt_weights=load_ckpt_weights,
-        use_unipc=args.use_unipc,
-        use_src_id_rotary_emb=args.use_src_tgt_id,
-    )
+    PIPELINE = build_pipeline(args, DEVICE)
 
     SAVE_BASE = args.save_dir or tempfile.mkdtemp(prefix="bernini_gradio_")
     os.makedirs(SAVE_BASE, exist_ok=True)
@@ -544,6 +745,10 @@ def main():
 
     if rank == 0:
         logger.info("output dir: %s", SAVE_BASE)
+        logger.info(
+            "loaded pipeline: %s",
+            "BerniniPipeline" if _is_full_bernini_pipeline() else "BerniniRendererPipeline",
+        )
         demo = create_ui()
         try:
             demo.queue(max_size=20, default_concurrency_limit=1).launch(

@@ -7,6 +7,7 @@ diffusers==0.35.2
 # mandatory for the Wan2.2 transformer (it keeps fp32-sensitive modules).
 accelerate==0.34.2
 transformers==4.57.3
+flash-attn==2.8.3
 safetensors
 einops
 numpy
@@ -14,6 +15,7 @@ Pillow
 tqdm
 ftfy
 ninja
+scipy
 
 # ---- Video / image I/O ----
 decord

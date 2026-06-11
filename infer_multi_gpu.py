@@ -45,6 +45,7 @@ from bernini.cli import (
     setup_logging,
 )
 from bernini.parallel import init_parallel_state
+from bernini.pipeline import BerniniPipeline
 
 
 def rewrite_prompt(rewriter, task, default_task_type, ps):
@@ -101,16 +102,31 @@ def main():
 
     for task in my_tasks:
         prompt = rewrite_prompt(rewriter, task, args.task_type, ps)
-        pipeline(
-            prompt,
-            video=task.get("video"),
-            image=task.get("image"),
-            images=task.get("images"),
-            output_path=task.get("output", args.output),
-            write_output=(ps.ulysses_rank == 0),
-            system_prompt=resolve_system_prompt(task, args),
-            **common,
-        )
+        task_name = task.get("task_type", args.task_type)
+        # BerniniPipeline takes task_name as first arg, BerniniRendererPipeline takes prompt
+        if isinstance(pipeline, BerniniPipeline):
+            pipeline(
+                task_name,
+                prompt,
+                video=task.get("video"),
+                image=task.get("image"),
+                images=task.get("images"),
+                output_path=task.get("output", args.output),
+                write_output=(ps.ulysses_rank == 0),
+                system_prompt=resolve_system_prompt(task, args),
+                **common,
+            )
+        else:
+            pipeline(
+                prompt,
+                video=task.get("video"),
+                image=task.get("image"),
+                images=task.get("images"),
+                output_path=task.get("output", args.output),
+                write_output=(ps.ulysses_rank == 0),
+                system_prompt=resolve_system_prompt(task, args),
+                **common,
+            )
 
     dist.barrier()
     dist.destroy_process_group()

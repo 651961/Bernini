@@ -12,12 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Single-GPU Bernini Renderer inference.
+"""Single-GPU Bernini inference.
 
-Example:
+Renderer-only example:
     python infer_single_gpu.py \\
         --high_noise_ckpt <path-or-hf-repo> --low_noise_ckpt <path-or-hf-repo> \\
         --case assets/testcases/v2v/v2v.json
+
+Full Bernini example:
+    python infer_single_gpu.py \\
+        --config ByteDance/Bernini-Diffusers \\
+        --case assets/testcases/v2v/v2v_case1.json
 """
 
 import argparse
@@ -33,6 +38,7 @@ from bernini.cli import (
     resolve_system_prompt,
     setup_logging,
 )
+from bernini.pipeline import BerniniPipeline
 
 
 def main():
@@ -63,15 +69,29 @@ def main():
                 image=task.get("image"),
                 images=task.get("images"),
             )
-        pipeline(
-            prompt,
-            video=task.get("video"),
-            image=task.get("image"),
-            images=task.get("images"),
-            output_path=task.get("output", args.output),
-            system_prompt=resolve_system_prompt(task, args),
-            **common,
-        )
+        task_name = task.get("task_type", args.task_type)
+        # BerniniPipeline takes task_name as first arg, BerniniRendererPipeline takes prompt
+        if isinstance(pipeline, BerniniPipeline):
+            pipeline(
+                task_name,
+                prompt,
+                video=task.get("video"),
+                image=task.get("image"),
+                images=task.get("images"),
+                output_path=task.get("output", args.output),
+                system_prompt=resolve_system_prompt(task, args),
+                **common,
+            )
+        else:
+            pipeline(
+                prompt,
+                video=task.get("video"),
+                image=task.get("image"),
+                images=task.get("images"),
+                output_path=task.get("output", args.output),
+                system_prompt=resolve_system_prompt(task, args),
+                **common,
+            )
 
 
 if __name__ == "__main__":

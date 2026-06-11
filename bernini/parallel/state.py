@@ -51,6 +51,18 @@ class ParallelState:
     def ulysses_enabled(self) -> bool:
         return self.ulysses_size > 1
 
+    @property
+    def sp_enabled(self) -> bool:
+        return self.ulysses_enabled
+
+    @property
+    def sp_size(self) -> int:
+        return self.ulysses_size
+
+    @property
+    def sp_group(self):
+        return self.ulysses_group
+
 
 _PARALLEL_STATE = ParallelState(ulysses_size=1)
 
@@ -80,15 +92,17 @@ def init_parallel_state(ulysses_size: int = 1) -> ParallelState:
             group = dist.new_group(ranks)
             if ps.rank in ranks:
                 ps.dp_group = group
-        # Register the Ulysses group with Open-VeOmni so its sequence-parallel
-        # primitives pick it up.
+        # Register the Ulysses group with Open-VeOmni so its native sequence-
+        # parallel primitives use the exact same communication semantics as
+        # veomni_editing Gradio inference.
+        from veomni.distributed.parallel_state import init_parallel_state as init_veomni_parallel_state
         from veomni.distributed.sequence_parallel.comm import (
             set_ulysses_sequence_parallel_group,
             set_unified_sequence_parallel_group,
         )
 
+        init_veomni_parallel_state(dp_size=ps.dp_size, ulysses_size=ulysses_size)
         set_ulysses_sequence_parallel_group(ps.ulysses_group)
         set_unified_sequence_parallel_group(ps.ulysses_group)
-
     _PARALLEL_STATE = ps
     return ps

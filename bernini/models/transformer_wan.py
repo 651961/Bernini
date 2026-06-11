@@ -444,6 +444,11 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
         hidden_states = hidden_states.flatten(2).transpose(1, 2)  # [B,C,T,H,W] -> [B,THW,C]
         return hidden_states, rotary_emb
 
+    def patch_vae_embedding(self, hidden_states: torch.Tensor):
+        """Patch-embed pre-packed VAE patches `[N,C,pt,ph,pw]` into `[N,inner_dim]`."""
+        hidden_states = self.patch_embedding(hidden_states)
+        return hidden_states.flatten(1)
+
     def prepare_inputs_for_sp(
         self,
         hidden_states: torch.Tensor,
@@ -466,6 +471,7 @@ class WanTransformer3DModel(ModelMixin, ConfigMixin):
             origin_hidden_states_seq_len = hidden_states.shape[1]
             hidden_states = padding_tensor_for_seqeunce_parallel(hidden_states, dim=1)
             temb = padding_tensor_for_seqeunce_parallel(temb, dim=1)
+            timestep_proj_indices = padding_tensor_for_seqeunce_parallel(timestep_proj_indices, dim=0)
             hidden_states = slice_input_tensor_scale_grad(hidden_states, dim=1)
             temb = slice_input_tensor_scale_grad(temb, dim=1)
             timestep_proj_indices = slice_input_tensor(timestep_proj_indices, dim=0)

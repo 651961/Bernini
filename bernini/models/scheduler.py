@@ -43,18 +43,21 @@ class FlowMatchScheduler:
         num_inference_steps: int = 100,
         denoising_strength: float = 1.0,
         shift: float = None,
+        device=None,
         dtype: torch.dtype = torch.bfloat16,
     ):
         if shift is not None:
             self.shift = shift
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
         sigma_start = self.sigma_min + (self.sigma_max - self.sigma_min) * denoising_strength
         if self.extra_one_step:
             self.sigmas = torch.linspace(
-                sigma_start, self.sigma_min, num_inference_steps + 1, device="cuda", dtype=dtype
+                sigma_start, self.sigma_min, num_inference_steps + 1, device=device, dtype=dtype
             )[:-1]
         else:
             self.sigmas = torch.linspace(
-                sigma_start, self.sigma_min, num_inference_steps, device="cuda", dtype=dtype
+                sigma_start, self.sigma_min, num_inference_steps, device=device, dtype=dtype
             )
         if self.inverse_timesteps:
             self.sigmas = torch.flip(self.sigmas, dims=[0])
