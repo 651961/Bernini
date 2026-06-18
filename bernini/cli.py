@@ -32,7 +32,7 @@ DEFAULT_NEG_PROMPT = (
     "杂乱的背景，三条腿，背景人很多，倒着走"
 )
 # Allowed --guidance_mode values, shared by argparse and the case-file loader.
-GUIDANCE_MODES = ["rv2v", "v2v", "v2v_chain", "t2v", "r2v_apg", "v2v_apg", "t2v_apg", "vae_txt_vit_wapg", "rv2v_wapg"]
+GUIDANCE_MODES = ["rv2v", "v2v", "v2v_chain", "t2v", "r2v_apg", "v2v_apg", "t2v_apg", "vae_txt_vit_wapg", "r2v_wapg", "rv2v_wapg"]
 
 # Keys a case file under assets/testcases/ may set: one example's routing and
 # inputs. Generation params (seed, num_frames, omega_*, ...) stay on the CLI.

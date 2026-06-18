@@ -846,7 +846,7 @@ class GEN_Wanx22(nn.Module):
             **_seq_lens_kwargs(latent_model_inputs_wovae, prompt_embeds_wotxt_wovit),
             **shared_kwargs
         )
-        if guidance_mode in ["rv2v_wapg"]:
+        if guidance_mode in ["r2v_wapg", "rv2v_wapg"]:
             if cur_omega_vid > 0.0:
                 eps_V = self.shared_step(
                     noisy_latents=latent_model_inputs_wvidvae,

@@ -424,6 +424,7 @@ class BerniniPipeline:
             subfolder=config.processor_subfolder,
             padding_side="right",
             trust_remote_code=True,
+            fix_mistral_regex=True,
         )
 
         vae = AutoencoderKLWan.from_pretrained(
